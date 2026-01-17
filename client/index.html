@@ -217,8 +217,12 @@
 
         <div class="room-section">
             <div class="room-input-group">
-                <input type="text" id="roomInput" placeholder="Enter room name (e.g., room-1)" value="room-1">
-                <button id="joinRoomBtn" class="secondary">Join Room</button>
+                <input type="text" id="serverUrlInput" placeholder="Server URL (e.g., https://your-server.com)" value="">
+                <button id="connectServerBtn" class="secondary">Connect to Server</button>
+            </div>
+            <div class="room-input-group" style="margin-top: 10px;">
+                <input type="text" id="roomInput" placeholder="Enter room name (e.g., room-1)" value="room-1" disabled>
+                <button id="joinRoomBtn" class="secondary" disabled>Join Room</button>
             </div>
             <div id="currentRoom" class="current-room" style="display: none;"></div>
             <div id="usersList" class="users-list" style="display: none;">
@@ -249,8 +253,11 @@
     <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
     
     <!-- Google Maps JavaScript API -->
-    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCK-H47kJydE-8MRJDBYuBQ8juShWSLUyk&callback=initMap" async defer></script>
-    
+    <script
+        src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&callback=initMap"
+        async
+        defer>
+        </script>
     <!-- Main application logic -->
     <script src="main.js"></script>
 </body>

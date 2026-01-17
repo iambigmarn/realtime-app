@@ -4,8 +4,9 @@
 // ============================================================================
 
 // Configuration
-// Auto-detect server URL from current page (works for both localhost and network IP)
-const SERVER_URL = `${window.location.protocol}//${window.location.hostname}:${window.location.port || 3000}`;
+// Server URL - will be set by user via UI or auto-detected for localhost
+let SERVER_URL = '';
+
 let ROOM_ID = null; // Will be set when user joins a room
 const STUN_SERVER = { urls: 'stun:stun.l.google.com:19302' };
 
@@ -25,6 +26,8 @@ const localVideo = document.getElementById('localVideo');
 const remoteVideosContainer = document.getElementById('remoteVideosContainer');
 const startCallBtn = document.getElementById('startCallBtn');
 const statusDiv = document.getElementById('status');
+const serverUrlInput = document.getElementById('serverUrlInput');
+const connectServerBtn = document.getElementById('connectServerBtn');
 const roomInput = document.getElementById('roomInput');
 const joinRoomBtn = document.getElementById('joinRoomBtn');
 const currentRoomDiv = document.getElementById('currentRoom');
@@ -36,6 +39,12 @@ const usersListItems = document.getElementById('usersListItems');
 // ============================================================================
 
 function initializeSocket() {
+    if (!SERVER_URL) {
+        updateStatus('ERROR: Server URL not configured. Please update SERVER_URL in main.js', 'error');
+        console.error('SERVER_URL is not set. Please configure your server URL in main.js');
+        return;
+    }
+    
     socket = io(SERVER_URL);
 
     socket.on('connect', () => {
@@ -555,6 +564,44 @@ function updateUsersList() {
 // UI Event Handlers
 // ============================================================================
 
+// Connect to server
+connectServerBtn.addEventListener('click', () => {
+    const serverUrl = serverUrlInput.value.trim();
+    if (!serverUrl) {
+        updateStatus('Please enter a server URL', 'error');
+        return;
+    }
+    
+    // Validate URL format
+    try {
+        new URL(serverUrl);
+    } catch (e) {
+        updateStatus('Invalid server URL format. Use http:// or https://', 'error');
+        return;
+    }
+    
+    SERVER_URL = serverUrl;
+    updateStatus('Connecting to server...', 'success');
+    
+    // Initialize socket connection
+    if (socket) {
+        socket.disconnect();
+    }
+    initializeSocket();
+    
+    // Enable room input
+    roomInput.disabled = false;
+    joinRoomBtn.disabled = false;
+    connectServerBtn.disabled = true;
+    serverUrlInput.disabled = true;
+});
+
+serverUrlInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        connectServerBtn.click();
+    }
+});
+
 joinRoomBtn.addEventListener('click', () => {
     const roomName = roomInput.value.trim();
     joinRoom(roomName);
@@ -593,7 +640,7 @@ function updateStatus(message, type = '') {
 // Initialize Application
 // ============================================================================
 
-// Initialize Socket.IO connection when page loads
+// Initialize when page loads
 document.addEventListener('DOMContentLoaded', () => {
     // Check if page is served over HTTP/HTTPS (required for getUserMedia and WebRTC)
     if (window.location.protocol === 'file:') {
@@ -611,6 +658,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
 
-    initializeSocket();
-    updateStatus('Initializing...', 'success');
+    // Auto-detect server URL for localhost
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        SERVER_URL = `${window.location.protocol}//${window.location.hostname}:${window.location.port || 3000}`;
+        serverUrlInput.value = SERVER_URL;
+        // Auto-connect for localhost
+        initializeSocket();
+        roomInput.disabled = false;
+        joinRoomBtn.disabled = false;
+        connectServerBtn.disabled = true;
+        serverUrlInput.disabled = true;
+        updateStatus('Connected to localhost server', 'success');
+    } else {
+        // For production, user must enter server URL
+        updateStatus('Enter your server URL and click "Connect to Server"', 'success');
+        serverUrlInput.placeholder = 'e.g., https://your-server.railway.app';
+    }
 });
