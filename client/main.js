@@ -10,15 +10,62 @@ let SERVER_URL = '';
 let ROOM_ID = null; // Will be set when user joins a room
 
 // ICE servers for WebRTC - using multiple STUN servers for better connectivity
-// For production, you might want to add TURN servers for users behind strict NATs
+// TURN servers are needed for users behind strict NATs/firewalls
+// Free TURN options: Metered.ca (free tier), Twilio (free trial)
+// See TURN_SERVER_SETUP.md for detailed instructions
 const ICE_SERVERS = [
+    // STUN servers (for NAT discovery)
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' }
-    // Add TURN servers here if needed:
-    // { urls: 'turn:your-turn-server.com:3478', username: 'user', credential: 'pass' }
+    { urls: 'stun:stun4.l.google.com:19302' },
+    {
+        urls: "stun:stun.relay.metered.ca:80",
+      },
+      {
+        urls: "turn:standard.relay.metered.ca:80",
+        username: "246228c56f52b9398c70d387",
+        credential: "QMjln1jVfjwMg/bC",
+      },
+      {
+        urls: "turn:standard.relay.metered.ca:80?transport=tcp",
+        username: "246228c56f52b9398c70d387",
+        credential: "QMjln1jVfjwMg/bC",
+      },
+      {
+        urls: "turn:standard.relay.metered.ca:443",
+        username: "246228c56f52b9398c70d387",
+        credential: "QMjln1jVfjwMg/bC",
+      },
+      {
+        urls: "turns:standard.relay.metered.ca:443?transport=tcp",
+        username: "246228c56f52b9398c70d387",
+        credential: "QMjln1jVfjwMg/bC",
+      },
+    
+    // Add TURN servers here (uncomment and fill in your credentials):
+    // Example with Metered.ca free TURN:
+    // {
+    //     urls: 'turn:a.relay.metered.ca:80',
+    //     username: 'your-username',
+    //     credential: 'your-credential'
+    // },
+    // {
+    //     urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+    //     username: 'your-username',
+    //     credential: 'your-credential'
+    // },
+    // {
+    //     urls: 'turn:a.relay.metered.ca:443',
+    //     username: 'your-username',
+    //     credential: 'your-credential'
+    // },
+    // {
+    //     urls: 'turn:a.relay.metered.ca:443?transport=tcp',
+    //     username: 'your-username',
+    //     credential: 'your-credential'
+    // }
 ];
 
 // Global state
@@ -141,7 +188,7 @@ function initializeSocket() {
     // Handle WebRTC signaling messages
     socket.on('webrtc-signal', async (data) => {
         const { from, signal } = data;
-        console.log('Received WebRTC signal from', from, signal.type);
+        console.log('Received WebRTC signal from', from, signal.type, 'Current state:', peerConnections.get(from)?.signalingState);
 
         // Get or create peer connection for this specific user
         let peerConnection = peerConnections.get(from);
@@ -157,14 +204,21 @@ function initializeSocket() {
 
         try {
             if (signal.type === 'offer') {
-                // Check if we already have a local description (we sent an offer)
-                // If so, this is a simultaneous offer - we should handle it as a rollback
-                if (peerConnection.localDescription && peerConnection.localDescription.type === 'offer') {
-                    console.log('Simultaneous offer detected, setting remote description...');
+                const currentState = peerConnection.signalingState;
+                console.log('Processing offer from', from, 'Current signaling state:', currentState);
+                
+                // If we already have a local offer (simultaneous offers), we need to handle it
+                if (currentState === 'have-local-offer') {
+                    console.log('Simultaneous offer detected - rolling back and accepting remote offer');
+                    // Rollback: set local description to null, then set remote offer
+                    await peerConnection.setLocalDescription({ type: 'rollback' });
                 }
                 
-                // Set remote description and create answer
+                // Set remote description (offer)
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+                console.log('Remote offer set, creating answer...');
+                
+                // Create and set local answer
                 const answer = await peerConnection.createAnswer();
                 await peerConnection.setLocalDescription(answer);
 
@@ -178,24 +232,66 @@ function initializeSocket() {
                 
                 console.log('Answer created and sent to', from);
             } else if (signal.type === 'answer') {
-                // Set remote description (answer)
-                const remoteDesc = new RTCSessionDescription(signal);
-                await peerConnection.setRemoteDescription(remoteDesc);
-                console.log('Answer received and set for', from);
+                const currentState = peerConnection.signalingState;
+                console.log('Processing answer from', from, 'Current signaling state:', currentState);
+                
+                // Only set answer if we're in the correct state
+                if (currentState === 'have-local-offer') {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+                    console.log('Answer received and set for', from);
+                } else {
+                    console.warn('Cannot set answer - wrong state:', currentState, 'Expected: have-local-offer');
+                    // If we're not in the right state, we might need to recreate the connection
+                    if (currentState === 'stable') {
+                        console.log('Connection is stable, recreating offer...');
+                        await createOffer(from);
+                    }
+                }
             } else if (signal.type === 'candidate') {
                 // Add ICE candidate (can be added even before remote description is set)
                 try {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
-                    console.log('ICE candidate added for', from);
+                    if (peerConnection.remoteDescription) {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                        console.log('ICE candidate added for', from);
+                    } else {
+                        // Queue candidate if remote description not ready
+                        console.log('Queueing ICE candidate for', from, '(remote description not ready)');
+                        // Store candidate and add it later when remote description is set
+                        peerConnection.addEventListener('signalingstatechange', async () => {
+                            if (peerConnection.signalingState === 'have-remote-offer' || peerConnection.signalingState === 'stable') {
+                                try {
+                                    await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                                    console.log('Queued ICE candidate added for', from);
+                                } catch (err) {
+                                    console.error('Error adding queued ICE candidate:', err);
+                                }
+                            }
+                        }, { once: true });
+                    }
                 } catch (error) {
-                    // If remote description isn't set yet, queue the candidate
-                    console.log('Queueing ICE candidate for', from, '(remote description not ready)');
-                    // The candidate will be processed when remote description is set
+                    console.error('Error adding ICE candidate:', error);
                 }
             }
         } catch (error) {
             console.error('Error handling WebRTC signal:', error);
             updateStatus('Error handling WebRTC signal: ' + error.message, 'error');
+            
+            // If it's a state error, try to recover by recreating the connection
+            if (error.message.includes('wrong state') || error.message.includes('InvalidStateError')) {
+                console.log('Attempting to recover from state error by recreating connection with', from);
+                try {
+                    peerConnection.close();
+                    peerConnections.delete(from);
+                    removeRemoteVideo(from);
+                    
+                    if (localStream) {
+                        await createPeerConnection(from);
+                        await createOffer(from);
+                    }
+                } catch (recoverError) {
+                    console.error('Recovery failed:', recoverError);
+                }
+            }
         }
     });
 
