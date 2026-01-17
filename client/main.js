@@ -328,15 +328,19 @@ async function createPeerConnection(userId) {
 
     // Add local stream tracks to peer connection
     if (localStream) {
+        const videoTracks = localStream.getVideoTracks();
+        const audioTracks = localStream.getAudioTracks();
+        console.log(`Adding local tracks to peer connection with ${userId}: ${videoTracks.length} video, ${audioTracks.length} audio`);
+        
         localStream.getTracks().forEach(track => {
+            console.log(`Adding local ${track.kind} track (enabled: ${track.enabled})`);
             peerConnection.addTrack(track, localStream);
         });
     }
 
     // Handle remote stream - create video element for this specific user
     peerConnection.ontrack = (event) => {
-        console.log('Received remote stream from', userId);
-        console.log('Stream tracks:', event.streams[0].getTracks().map(t => `${t.kind} (${t.enabled ? 'enabled' : 'disabled'})`));
+        console.log('Received remote track from', userId, 'Track kind:', event.track.kind);
         
         // Safety check: Don't show our own video as a remote video
         if (userId === socket.id) {
@@ -344,18 +348,40 @@ async function createPeerConnection(userId) {
             return;
         }
         
-        const remoteStream = event.streams[0];
+        // Get or create the remote stream for this user
+        let remoteStream = event.streams[0];
         
-        // Verify stream has tracks
-        const tracks = remoteStream.getTracks();
-        if (tracks.length === 0) {
-            console.warn('Remote stream has no tracks');
+        // If we already have a video element for this user, update it
+        const existingVideo = remoteVideos.get(userId);
+        if (existingVideo && existingVideo.videoElement.srcObject) {
+            // Add the new track to the existing stream
+            const existingStream = existingVideo.videoElement.srcObject;
+            if (event.track.kind === 'video') {
+                console.log('Adding video track to existing stream for', userId);
+                existingStream.addTrack(event.track);
+                // Force video to reload
+                existingVideo.videoElement.srcObject = existingStream;
+                existingVideo.videoElement.play().catch(err => console.error('Play error:', err));
+            }
             return;
         }
         
-        console.log(`Adding remote video for ${userId} with ${tracks.length} tracks`);
-        addRemoteVideo(userId, remoteStream);
-        updateStatus(`Video from ${userId.substring(0, 8)} connected`, 'success');
+        // Create new video element if this is the first track
+        if (remoteStream && remoteStream.getTracks().length > 0) {
+            const tracks = remoteStream.getTracks();
+            console.log(`Adding remote video for ${userId} with ${tracks.length} tracks:`, 
+                tracks.map(t => `${t.kind} (${t.enabled ? 'enabled' : 'disabled'})`));
+            
+            // Verify we have a video track
+            const hasVideo = tracks.some(t => t.kind === 'video');
+            if (!hasVideo) {
+                console.warn('Remote stream has no video track, waiting for video track...');
+                return;
+            }
+            
+            addRemoteVideo(userId, remoteStream);
+            updateStatus(`Video from ${userId.substring(0, 8)} connected`, 'success');
+        }
     };
 
     // Handle ICE candidates - send to specific user
@@ -465,20 +491,54 @@ function addRemoteVideo(userId, stream) {
     video.autoplay = true;
     video.playsInline = true;
     video.muted = false; // Make sure audio is not muted for remote videos
+    video.setAttribute('playsinline', 'true'); // iOS compatibility
+    video.setAttribute('webkit-playsinline', 'true'); // iOS compatibility
+    
+    // Set the stream
     video.srcObject = stream;
     
     // Ensure video plays and log stream info
     video.onloadedmetadata = () => {
         console.log(`Video metadata loaded for ${userId}, tracks:`, stream.getTracks().map(t => `${t.kind} (${t.enabled ? 'enabled' : 'disabled'})`));
-        video.play().catch(error => {
-            console.error('Error playing remote video:', error);
-        });
+        console.log(`Video dimensions: ${video.videoWidth}x${video.videoHeight}`);
+        
+        // Force play
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+            playPromise.catch(error => {
+                console.error('Error playing remote video:', error);
+                // Try again after a short delay
+                setTimeout(() => {
+                    video.play().catch(err => console.error('Retry play error:', err));
+                }, 100);
+            });
+        }
     };
     
     // Log when video starts playing
     video.onplay = () => {
         console.log(`Remote video playing for ${userId}`);
     };
+    
+    // Handle video track ended
+    stream.getVideoTracks().forEach(track => {
+        track.onended = () => {
+            console.log(`Video track ended for ${userId}`);
+        };
+        track.onmute = () => {
+            console.warn(`Video track muted for ${userId}`);
+        };
+        track.onunmute = () => {
+            console.log(`Video track unmuted for ${userId}`);
+        };
+    });
+    
+    // Try to play immediately
+    setTimeout(() => {
+        if (video.paused) {
+            video.play().catch(err => console.error('Delayed play error:', err));
+        }
+    }, 100);
 
     // Create label
     const label = document.createElement('div');
