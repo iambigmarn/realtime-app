@@ -96,6 +96,8 @@ function initializeSocket() {
         updateUsersList();
 
         // Create peer connection with the new user (if not ourselves)
+        // Only if we already have local stream (camera started)
+        // If we don't have local stream yet, we'll create connection when we start camera
         if (localStream && userId !== socket.id) {
             await createPeerConnection(userId);
             await createOffer(userId);
@@ -144,6 +146,12 @@ function initializeSocket() {
 
         try {
             if (signal.type === 'offer') {
+                // Check if we already have a local description (we sent an offer)
+                // If so, this is a simultaneous offer - we should handle it as a rollback
+                if (peerConnection.localDescription && peerConnection.localDescription.type === 'offer') {
+                    console.log('Simultaneous offer detected, setting remote description...');
+                }
+                
                 // Set remote description and create answer
                 await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
                 const answer = await peerConnection.createAnswer();
@@ -156,18 +164,27 @@ function initializeSocket() {
                     to: from,
                     signal: answer
                 });
+                
+                console.log('Answer created and sent to', from);
             } else if (signal.type === 'answer') {
                 // Set remote description (answer)
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(signal));
+                const remoteDesc = new RTCSessionDescription(signal);
+                await peerConnection.setRemoteDescription(remoteDesc);
+                console.log('Answer received and set for', from);
             } else if (signal.type === 'candidate') {
-                // Add ICE candidate
-                if (peerConnection.remoteDescription) {
+                // Add ICE candidate (can be added even before remote description is set)
+                try {
                     await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+                    console.log('ICE candidate added for', from);
+                } catch (error) {
+                    // If remote description isn't set yet, queue the candidate
+                    console.log('Queueing ICE candidate for', from, '(remote description not ready)');
+                    // The candidate will be processed when remote description is set
                 }
             }
         } catch (error) {
             console.error('Error handling WebRTC signal:', error);
-            updateStatus('Error handling WebRTC signal', 'error');
+            updateStatus('Error handling WebRTC signal: ' + error.message, 'error');
         }
     });
 
@@ -243,12 +260,20 @@ async function createPeerConnection(userId) {
         console.log(`Peer connection with ${userId.substring(0, 8)}:`, peerConnection.connectionState);
         if (peerConnection.connectionState === 'connected') {
             updateStatus(`Connected to ${userId.substring(0, 8)}`, 'success');
+        } else if (peerConnection.connectionState === 'failed') {
+            console.error(`Connection failed with ${userId.substring(0, 8)}`);
+            updateStatus(`Connection failed with ${userId.substring(0, 8)}`, 'error');
         }
     };
 
     // Handle ICE connection state
     peerConnection.oniceconnectionstatechange = () => {
         console.log(`ICE connection with ${userId.substring(0, 8)}:`, peerConnection.iceConnectionState);
+        if (peerConnection.iceConnectionState === 'failed') {
+            console.error(`ICE connection failed with ${userId.substring(0, 8)}`);
+            // Try to restart ICE
+            peerConnection.restartIce();
+        }
     };
 
     // Store the peer connection
@@ -381,8 +406,20 @@ async function startLocalStream() {
         localVideo.srcObject = localStream;
         updateStatus('Camera and microphone enabled', 'success');
 
-        // Peer connections will be created when we receive room-state or user-joined events
-        // This ensures we connect to all existing users
+        // Now that we have local stream, create peer connections with all existing users
+        if (isInRoom && currentRoomUsers.size > 1) {
+            // Get all other users (excluding ourselves)
+            const otherUsers = Array.from(currentRoomUsers).filter(id => id !== socket.id);
+            for (const userId of otherUsers) {
+                try {
+                    await createPeerConnection(userId);
+                    await createOffer(userId);
+                } catch (error) {
+                    console.error('Error creating connection with', userId, error);
+                }
+            }
+        }
+
         return true;
     } catch (error) {
         console.error('Error accessing media devices:', error);
