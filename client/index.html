@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time WebRTC + Maps</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        .video-section {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .video-container {
+            flex: 0 0 300px;
+            min-width: 250px;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .remote-videos {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            flex: 1;
+        }
+
+        .remote-video-wrapper {
+            flex: 0 0 300px;
+            min-width: 250px;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .video-label {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .controls {
+            margin-bottom: 20px;
+        }
+
+        .room-section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .room-input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            align-items: center;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+
+        button.secondary {
+            background: #2196F3;
+        }
+
+        button.secondary:hover {
+            background: #1976D2;
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background: #e3f2fd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .status.error {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .status.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .users-list {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 4px;
+        }
+
+        .users-list h3 {
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .users-list ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .users-list li {
+            padding: 8px;
+            margin: 5px 0;
+            background: white;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .users-list li.self {
+            background: #e3f2fd;
+            font-weight: bold;
+        }
+
+        .user-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4CAF50;
+        }
+
+        .current-room {
+            margin-top: 10px;
+            padding: 10px;
+            background: #e8f5e9;
+            border-radius: 4px;
+            font-weight: bold;
+            color: #2e7d32;
+        }
+
+        #map {
+            width: 100%;
+            height: 500px;
+            border-radius: 8px;
+            border: 2px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Real-time Communication System</h1>
+
+        <div class="room-section">
+            <div class="room-input-group">
+                <input type="text" id="roomInput" placeholder="Enter room name (e.g., room-1)" value="room-1">
+                <button id="joinRoomBtn" class="secondary">Join Room</button>
+            </div>
+            <div id="currentRoom" class="current-room" style="display: none;"></div>
+            <div id="usersList" class="users-list" style="display: none;">
+                <h3>Users in room:</h3>
+                <ul id="usersListItems"></ul>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="startCallBtn" disabled>Start Call</button>
+            <div class="status" id="status">Enter a room name and click "Join Room" to begin</div>
+        </div>
+
+        <div class="video-section">
+            <div class="video-container">
+                <div class="video-label">Your Video</div>
+                <video id="localVideo" autoplay muted playsinline></video>
+            </div>
+            <div id="remoteVideosContainer" class="remote-videos">
+                <!-- Remote videos will be dynamically added here -->
+            </div>
+        </div>
+
+        <div id="map"></div>
+    </div>
+
+    <!-- Socket.IO Client Library -->
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    
+    <!-- Google Maps JavaScript API -->
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCK-H47kJydE-8MRJDBYuBQ8juShWSLUyk&callback=initMap" async defer></script>
+    
+    <!-- Main application logic -->
+    <script src="main.js"></script>
+</body>
+</html>
