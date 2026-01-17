@@ -8,7 +8,18 @@
 let SERVER_URL = '';
 
 let ROOM_ID = null; // Will be set when user joins a room
-const STUN_SERVER = { urls: 'stun:stun.l.google.com:19302' };
+
+// ICE servers for WebRTC - using multiple STUN servers for better connectivity
+// For production, you might want to add TURN servers for users behind strict NATs
+const ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
+    // Add TURN servers here if needed:
+    // { urls: 'turn:your-turn-server.com:3478', username: 'user', credential: 'pass' }
+];
 
 // Global state
 let socket = null;
@@ -213,9 +224,10 @@ async function createPeerConnection(userId) {
         return;
     }
 
-    // Create RTCPeerConnection with STUN server
+    // Create RTCPeerConnection with ICE servers
     const peerConnection = new RTCPeerConnection({
-        iceServers: [STUN_SERVER]
+        iceServers: ICE_SERVERS,
+        iceCandidatePoolSize: 10 // Pre-gather more candidates
     });
 
     // Add local stream tracks to peer connection
@@ -228,6 +240,7 @@ async function createPeerConnection(userId) {
     // Handle remote stream - create video element for this specific user
     peerConnection.ontrack = (event) => {
         console.log('Received remote stream from', userId);
+        console.log('Stream tracks:', event.streams[0].getTracks().map(t => `${t.kind} (${t.enabled ? 'enabled' : 'disabled'})`));
         
         // Safety check: Don't show our own video as a remote video
         if (userId === socket.id) {
@@ -236,6 +249,15 @@ async function createPeerConnection(userId) {
         }
         
         const remoteStream = event.streams[0];
+        
+        // Verify stream has tracks
+        const tracks = remoteStream.getTracks();
+        if (tracks.length === 0) {
+            console.warn('Remote stream has no tracks');
+            return;
+        }
+        
+        console.log(`Adding remote video for ${userId} with ${tracks.length} tracks`);
         addRemoteVideo(userId, remoteStream);
         updateStatus(`Video from ${userId.substring(0, 8)} connected`, 'success');
     };
@@ -260,9 +282,28 @@ async function createPeerConnection(userId) {
         console.log(`Peer connection with ${userId.substring(0, 8)}:`, peerConnection.connectionState);
         if (peerConnection.connectionState === 'connected') {
             updateStatus(`Connected to ${userId.substring(0, 8)}`, 'success');
-        } else if (peerConnection.connectionState === 'failed') {
-            console.error(`Connection failed with ${userId.substring(0, 8)}`);
-            updateStatus(`Connection failed with ${userId.substring(0, 8)}`, 'error');
+        } else if (peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'disconnected') {
+            console.error(`Connection ${peerConnection.connectionState} with ${userId.substring(0, 8)}`);
+            updateStatus(`Connection ${peerConnection.connectionState} with ${userId.substring(0, 8)}`, 'error');
+            
+            // Try to reconnect after a delay if failed
+            if (peerConnection.connectionState === 'failed' && localStream) {
+                setTimeout(async () => {
+                    console.log(`Attempting to reconnect to ${userId.substring(0, 8)}`);
+                    try {
+                        // Close old connection
+                        peerConnection.close();
+                        peerConnections.delete(userId);
+                        removeRemoteVideo(userId);
+                        
+                        // Create new connection
+                        await createPeerConnection(userId);
+                        await createOffer(userId);
+                    } catch (error) {
+                        console.error('Reconnection failed:', error);
+                    }
+                }, 3000);
+            }
         }
     };
 
@@ -327,7 +368,21 @@ function addRemoteVideo(userId, stream) {
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
+    video.muted = false; // Make sure audio is not muted for remote videos
     video.srcObject = stream;
+    
+    // Ensure video plays and log stream info
+    video.onloadedmetadata = () => {
+        console.log(`Video metadata loaded for ${userId}, tracks:`, stream.getTracks().map(t => `${t.kind} (${t.enabled ? 'enabled' : 'disabled'})`));
+        video.play().catch(error => {
+            console.error('Error playing remote video:', error);
+        });
+    };
+    
+    // Log when video starts playing
+    video.onplay = () => {
+        console.log(`Remote video playing for ${userId}`);
+    };
 
     // Create label
     const label = document.createElement('div');
